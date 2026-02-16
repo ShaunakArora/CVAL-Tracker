@@ -1,0 +1,18 @@
+[
+    {
+        "username": "admin",
+        "password": "scrypt:32768:8:1$3dcUMd7PTcnZtdTl$f7e102e844c0be8e634a0f35b614d543e1993e2712794734f8cbbc79127af104392b80175edacb864dfb159f4d31878c12ead3fb53fbde26f511575ff7837d18",
+        "role": "admin",
+        "department": "System",
+        "created_at": "2026-01-29 18:44:23"
+    },
+    {
+        "username": "Sample",
+        "department": "HR",
+        "role": "employee",
+        "shift": "Day",
+        "location": "Vadodara",
+        "password": "scrypt:32768:8:1$j2WgyeyjlXg4jNKo$93ae93c0855c543107d0115cb87875961225831c69785517ed3b1ef0ca8e5d7c03b5c45d7c08e548ace40b0402d1b49c2e144652e78d380b2939c6f0d4ab27b5",
+        "created_at": "2026-01-29 18:54:04"
+    }
+]

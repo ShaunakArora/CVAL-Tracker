@@ -1,0 +1,78 @@
+[
+    {
+        "timestamp": "2026-02-10 19:11:27",
+        "message": "Employee Sample logged out."
+    },
+    {
+        "timestamp": "2026-02-10 18:31:25",
+        "message": "Employee Sample logged in."
+    },
+    {
+        "timestamp": "2026-02-05 18:59:50",
+        "message": "Employee Sample logged in."
+    },
+    {
+        "timestamp": "2026-02-05 18:55:46",
+        "message": "Employee Sample logged out."
+    },
+    {
+        "timestamp": "2026-02-05 18:54:55",
+        "message": "Employee Sample logged in."
+    },
+    {
+        "timestamp": "2026-02-05 18:43:06",
+        "message": "Employee Sample logged out."
+    },
+    {
+        "timestamp": "2026-02-05 18:40:54",
+        "message": "Employee Sample logged in."
+    },
+    {
+        "timestamp": "2026-02-05 18:26:18",
+        "message": "Employee Sample logged out."
+    },
+    {
+        "timestamp": "2026-02-05 18:25:13",
+        "message": "Employee Sample logged in."
+    },
+    {
+        "timestamp": "2026-02-03 19:23:51",
+        "message": "Employee Sample logged out."
+    },
+    {
+        "timestamp": "2026-02-03 19:23:29",
+        "message": "Employee Sample logged in."
+    },
+    {
+        "timestamp": "2026-02-03 19:04:16",
+        "message": "Employee Sample logged in."
+    },
+    {
+        "timestamp": "2026-02-03 19:03:07",
+        "message": "Employee Sample logged in."
+    },
+    {
+        "timestamp": "2026-02-03 19:02:59",
+        "message": "Employee Sample logged out."
+    },
+    {
+        "timestamp": "2026-02-03 18:51:58",
+        "message": "Employee Sample logged in."
+    },
+    {
+        "timestamp": "2026-02-02 19:19:31",
+        "message": "Employee Sample logged out."
+    },
+    {
+        "timestamp": "2026-02-02 19:18:29",
+        "message": "Employee Sample logged in."
+    },
+    {
+        "timestamp": "2026-02-02 19:04:29",
+        "message": "Employee Sample logged out."
+    },
+    {
+        "timestamp": "2026-02-02 19:04:27",
+        "message": "Employee Sample logged in."
+    }
+]
