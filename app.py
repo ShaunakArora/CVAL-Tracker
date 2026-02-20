@@ -251,9 +251,7 @@ def admin_summary():
 @app.route('/admin/dashboard')
 @admin_required
 def admin_dashboard():
-    alerts = []
-    if os.path.exists(ALERTS_FILE):
-        alerts = Alert.query.order_by(Alert.timestamp.desc()).all()
+    alerts = Alert.query.order_by(Alert.timestamp.desc()).all()
     return render_template('admin/dashboard.html', alerts=alerts)
 
 @app.route('/admin/create_employee', methods=['GET', 'POST'])
