@@ -270,13 +270,13 @@
                                 <tbody>
                                     {% for log in logs %}
                                     <tr>
-                                        <td>{{ log['Date'] }}</td>
-                                        <td>{{ log['Team Member'] }}</td>
-                                        <td>{{ log['Function'] }}</td>
-                                        <td>{{ log['File Number'] }}</td>
-                                        <td>{{ log['Status'] }}</td>
-                                        <td>{{ log['Department'] }}</td>
-                                        <td>{{ log['Comments'] }}</td>
+                                        <td>{{ log.date.strftime('%Y-%m-%d') if log.date }}</td>
+                                        <td>{{ log.team_member }}</td>
+                                        <td>{{ log.function }}</td>
+                                        <td>{{ log.file_number }}</td>
+                                        <td>{{ log.status }}</td>
+                                        <td>{{ log.department }}</td>
+                                        <td>{{ log.comments }}</td>
                                     </tr>
                                     {% else %}
                                     <tr>
