@@ -18,7 +18,7 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
 
 # Database Configuration
-db_uri = os.environ.get('postgresql://neondb_owner:npg_Qa9KTfvgFEd1@ep-hidden-tree-aipy45fo-pooler.c-4.us-east-1.aws.neon.tech/cval-db?sslmode=require&channel_binding=require')
+db_uri = os.environ.get('DATABASE_URL', 'postgresql://neondb_owner:npg_Qa9KTfvgFEd1@ep-hidden-tree-aipy45fo-pooler.c-4.us-east-1.aws.neon.tech/cval-db?sslmode=require&channel_binding=require')
 if db_uri and db_uri.startswith("postgres://"):
     db_uri = db_uri.replace("postgres://", "postgresql://", 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = db_uri or f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
