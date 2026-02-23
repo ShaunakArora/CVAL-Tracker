@@ -1,4 +1,6 @@
 from flask import Flask, render_template, jsonify, send_from_directory, request, redirect, url_for, flash, session
+from dotenv import load_dotenv
+load_dotenv()
 import os
 import json
 from datetime import datetime, timedelta
