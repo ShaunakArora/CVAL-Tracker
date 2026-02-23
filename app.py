@@ -489,4 +489,8 @@ def import_data_command():
 if __name__ == '__main__':
     print(f"Template folder set to: {os.path.join(BASE_DIR, 'templates')}")
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
-    app.run(debug=debug_mode, port=5000)
+    port = int(os.environ.get("PORT", 5000))
+
+    # Use the dynamic port and bind to 0.0.0.0
+    app.run(host="0.0.0.0", port=port, debug=debug_mode)
+
