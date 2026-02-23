@@ -180,10 +180,10 @@
                                 <tbody>
                                     {% for employee in employees %}
                                     <tr>
-                                        <td>{{ employee['Team Member'] }}</td>
-                                        <td>{{ employee.get('Department', '') }}</td>
-                                        <td>{{ employee.get('Shift', '') }}</td>
-                                        <td>{{ employee.get('Location', '') }}</td>
+                                        <td>{{ employee['username'] }}</td>
+                                        <td>{{ employee.get('role', '') }}</td>
+                                        <td>{{ employee.get('shift', '') }}</td>
+                                        <td>{{ employee.get('location', '') }}</td>
                                         <td>
                                             {% if employee.get('Status') == 'Active' %}
                                                 <span class="badge bg-success">Active</span>
