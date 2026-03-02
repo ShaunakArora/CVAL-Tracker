@@ -9,6 +9,10 @@ from functools import wraps
 from flask_wtf.csrf import CSRFProtect
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func
+import dash
+from dash import dcc, html
+import plotly.express as px
+import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
@@ -118,6 +122,128 @@ def admin_required(f):
             return redirect(url_for('employee_dashboard'))
         return f(*args, **kwargs)
     return decorated_function
+
+def init_dashboard(app):
+    """Create a Plotly Dash dashboard."""
+    dash_app = dash.Dash(
+        server=app,
+        routes_pathname_prefix="/admin/analytics/",
+        external_stylesheets=[
+            "https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css"
+        ],
+        suppress_callback_exceptions=True
+    )
+
+    # Protect Dash views
+    for view_func_name, view_func in app.view_functions.items():
+        if view_func_name.startswith(dash_app.config["routes_pathname_prefix"]):
+            app.view_functions[view_func_name] = admin_required(view_func)
+
+    # Create Dash layout
+    def create_layout():
+        logs = Log.query.all()
+        if not logs:
+            return html.Div([
+                html.H1("Analytics Dashboard"),
+                html.P("No data available to display.")
+            ], className="container")
+
+        df = pd.DataFrame(
+            [
+                {
+                    "team_member": log.team_member,
+                    "function": log.function,
+                    "date": log.date,
+                    "status": log.status,
+                }
+                for log in logs if log.date # Ensure date is not None
+            ]
+        )
+
+        if df.empty:
+            return html.Div([
+                html.H1("Analytics Dashboard"),
+                html.P("No data with valid dates available to display.")
+            ], className="container")
+
+        # 1. KPI cards
+        total_logs = len(df)
+        # NOTE: Assuming 'Completed' is a valid status for completion rate.
+        completed_logs = df[df['status'] == 'Completed'].shape[0]
+        completion_rate = (completed_logs / total_logs) * 100 if total_logs > 0 else 0
+        top_employee_series = df['team_member'].mode()
+        top_employee = top_employee_series[0] if not top_employee_series.empty else "N/A"
+
+        # 2. Interactive Time series
+        df['date'] = pd.to_datetime(df['date'])
+        logs_over_time = df.groupby(df['date'].dt.date).size().reset_index(name='count')
+        time_series_fig = px.line(logs_over_time, x='date', y='count', title='Total Logs Over Time', labels={'date': 'Date', 'count': 'Number of Logs'})
+
+        # 3. Horizontal bars: Top functions and employees
+        top_functions = df['function'].value_counts().nlargest(10).sort_values(ascending=True)
+        top_functions_fig = px.bar(top_functions, x=top_functions.values, y=top_functions.index, orientation='h', title='Top 10 Functions', labels={'x': 'Count', 'y': 'Function'})
+
+        top_employees = df['team_member'].value_counts().nlargest(10).sort_values(ascending=True)
+        top_employees_fig = px.bar(top_employees, x=top_employees.values, y=top_employees.index, orientation='h', title='Top 10 Employees by Logs', labels={'x': 'Count', 'y': 'Employee'})
+
+        # 4. Donut chart: Functions distribution
+        function_dist = df['function'].value_counts()
+        function_dist_fig = px.pie(function_dist, values=function_dist.values, names=function_dist.index, title='Functions Distribution', hole=0.4)
+
+        layout = html.Div(className="container-fluid", children=[
+            html.H1("Analytics Dashboard", className="my-4"),
+
+            # KPI Cards
+            html.Div(className="row", children=[
+                html.Div(className="col-md-4", children=[
+                    html.Div(className="card text-white bg-primary mb-3", children=[
+                        html.Div(className="card-header", children="Total Logs"),
+                        html.Div(className="card-body", children=[html.H4(f"{total_logs}", className="card-title")])
+                    ])
+                ]),
+                html.Div(className="col-md-4", children=[
+                    html.Div(className="card text-white bg-success mb-3", children=[
+                        html.Div(className="card-header", children="Completion Rate"),
+                        html.Div(className="card-body", children=[html.H4(f"{completion_rate:.2f}%", className="card-title")])
+                    ])
+                ]),
+                html.Div(className="col-md-4", children=[
+                    html.Div(className="card text-white bg-info mb-3", children=[
+                        html.Div(className="card-header", children="Top Employee (by logs)"),
+                        html.Div(className="card-body", children=[html.H4(top_employee, className="card-title")])
+                    ])
+                ]),
+            ]),
+
+            # Time Series
+            html.Div(className="row", children=[
+                html.Div(className="col", children=[
+                    dcc.Graph(figure=time_series_fig)
+                ])
+            ]),
+
+            # Bar Charts
+            html.Div(className="row mt-4", children=[
+                html.Div(className="col-md-6", children=[
+                    dcc.Graph(figure=top_functions_fig)
+                ]),
+                html.Div(className="col-md-6", children=[
+                    dcc.Graph(figure=top_employees_fig)
+                ])
+            ]),
+
+            # Donut Chart
+            html.Div(className="row mt-4", children=[
+                html.Div(className="col-md-8 offset-md-2", children=[
+                    dcc.Graph(figure=function_dist_fig)
+                ])
+            ])
+        ])
+        return layout
+
+    dash_app.layout = create_layout
+
+    return dash_app.server
 
 
 @app.route('/')
@@ -486,6 +612,8 @@ def import_data_command():
             db.session.commit()
             print(f"Imported alerts from {alerts_file}")
 
+init_dashboard(app)
+
 if __name__ == '__main__':
     print(f"Template folder set to: {os.path.join(BASE_DIR, 'templates')}")
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
@@ -493,4 +621,3 @@ if __name__ == '__main__':
 
     # Use the dynamic port and bind to 0.0.0.0
     app.run(host="0.0.0.0", port=port, debug=debug_mode)
-
