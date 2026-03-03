@@ -142,6 +142,9 @@
                 <a href="/summary" class="list-group-item">
                     <i class="fas fa-chart-bar"></i> View Summary
                 </a>
+                <a href="/admin/analytics/" class="list-group-item">
+                    <i class="fas fa-chart-line"></i> Analytics Dashboard
+                </a>
                 <a href="/admin/create_employee" class="list-group-item">
                     <i class="fas fa-user-plus"></i> Create Employee
                 </a>
@@ -181,9 +184,9 @@
                                     {% for employee in employees %}
                                     <tr>
                                         <td>{{ employee['Team Member'] }}</td>
-                                        <td>{{ employee.get('Department', '') }}</td>
-                                        <td>{{ employee.get('Shift', '') }}</td>
-                                        <td>{{ employee.get('Location', '') }}</td>
+                                        <td>{{ employee['Department'] }}</td>
+                                        <td>{{ employee['Shift'] }}</td>
+                                        <td>{{ employee['Location'] }}</td>
                                         <td>
                                             {% if employee.get('Status') == 'Active' %}
                                                 <span class="badge bg-success">Active</span>
@@ -236,4 +239,3 @@
     </script>
 </body>
 </html>
-
