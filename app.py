@@ -245,6 +245,117 @@ def init_dashboard(app):
 
     return dash_app.server
 
+def init_daily_dashboard(app):
+    """Create a Plotly Dash dashboard for Daily Analytics."""
+    dash_app = dash.Dash(
+        server=app,
+        routes_pathname_prefix="/admin/daily_analytics/",
+        external_stylesheets=[
+            "https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css"
+        ],
+        suppress_callback_exceptions=True
+    )
+
+    # Protect Dash views
+    for view_func_name, view_func in app.view_functions.items():
+        if view_func_name.startswith(dash_app.config["routes_pathname_prefix"]):
+            app.view_functions[view_func_name] = admin_required(view_func)
+
+    # Create Dash layout
+    def create_layout():
+        today = datetime.now().date()
+        logs = Log.query.filter(Log.date == today).all()
+        
+        if not logs:
+            return html.Div([
+                html.H1(f"Daily Analytics ({today})"),
+                html.P("No data available for today.")
+            ], className="container")
+
+        df = pd.DataFrame(
+            [
+                {
+                    "team_member": log.team_member,
+                    "function": log.function,
+                    "date": log.date,
+                    "status": log.status,
+                }
+                for log in logs
+            ]
+        )
+
+        if df.empty:
+            return html.Div([
+                html.H1(f"Daily Analytics ({today})"),
+                html.P("No data available to display.")
+            ], className="container")
+
+        # 1. KPI cards
+        total_logs = len(df)
+        completed_logs = df[df['status'] == 'Completed'].shape[0]
+        completion_rate = (completed_logs / total_logs) * 100 if total_logs > 0 else 0
+        top_employee_series = df['team_member'].mode()
+        top_employee = top_employee_series[0] if not top_employee_series.empty else "N/A"
+
+        # 2. Horizontal bars: Top functions and employees
+        top_functions = df['function'].value_counts().nlargest(10).sort_values(ascending=True)
+        top_functions_fig = px.bar(top_functions, x=top_functions.values, y=top_functions.index, orientation='h', title='Top 10 Functions Today', labels={'x': 'Count', 'y': 'Function'})
+
+        top_employees = df['team_member'].value_counts().nlargest(10).sort_values(ascending=True)
+        top_employees_fig = px.bar(top_employees, x=top_employees.values, y=top_employees.index, orientation='h', title='Top 10 Employees Today', labels={'x': 'Count', 'y': 'Employee'})
+
+        # 3. Donut chart: Functions distribution
+        function_dist = df['function'].value_counts()
+        function_dist_fig = px.pie(function_dist, values=function_dist.values, names=function_dist.index, title='Functions Distribution Today', hole=0.4)
+
+        layout = html.Div(className="container-fluid", children=[
+            html.H1(f"Daily Analytics ({today})", className="my-4"),
+
+            # KPI Cards
+            html.Div(className="row", children=[
+                html.Div(className="col-md-4", children=[
+                    html.Div(className="card text-white bg-primary mb-3", children=[
+                        html.Div(className="card-header", children="Total Logs Today"),
+                        html.Div(className="card-body", children=[html.H4(f"{total_logs}", className="card-title")])
+                    ])
+                ]),
+                html.Div(className="col-md-4", children=[
+                    html.Div(className="card text-white bg-success mb-3", children=[
+                        html.Div(className="card-header", children="Completion Rate"),
+                        html.Div(className="card-body", children=[html.H4(f"{completion_rate:.2f}%", className="card-title")])
+                    ])
+                ]),
+                html.Div(className="col-md-4", children=[
+                    html.Div(className="card text-white bg-info mb-3", children=[
+                        html.Div(className="card-header", children="Top Employee Today"),
+                        html.Div(className="card-body", children=[html.H4(top_employee, className="card-title")])
+                    ])
+                ]),
+            ]),
+
+            # Bar Charts
+            html.Div(className="row mt-4", children=[
+                html.Div(className="col-md-6", children=[
+                    dcc.Graph(figure=top_functions_fig)
+                ]),
+                html.Div(className="col-md-6", children=[
+                    dcc.Graph(figure=top_employees_fig)
+                ])
+            ]),
+
+            # Donut Chart
+            html.Div(className="row mt-4", children=[
+                html.Div(className="col-md-8 offset-md-2", children=[
+                    dcc.Graph(figure=function_dist_fig)
+                ])
+            ])
+        ])
+        return layout
+
+    dash_app.layout = create_layout
+
+    return dash_app.server
+
 
 @app.route('/')
 def landing():
@@ -613,6 +724,7 @@ def import_data_command():
             print(f"Imported alerts from {alerts_file}")
 
 init_dashboard(app)
+init_daily_dashboard(app)
 
 if __name__ == '__main__':
     print(f"Template folder set to: {os.path.join(BASE_DIR, 'templates')}")
