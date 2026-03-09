@@ -1,9 +1,11 @@
 from flask import Flask, render_template, jsonify, send_from_directory, request, redirect, url_for, flash, session
+from flask import Flask, render_template, jsonify, send_from_directory, request, redirect, url_for, flash, session, Response
 from dotenv import load_dotenv
 load_dotenv()
 import os
 import json
 from datetime import datetime, timedelta
+import io
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from flask_wtf.csrf import CSRFProtect
@@ -582,7 +584,102 @@ def track_employee():
         query = query.filter_by(team_member=selected_employee)
         
     logs_to_display = query.order_by(Log.id.desc()).all()
-    return render_template('admin/track_employee.html', employees=employees, logs=logs_to_display, selected_employee=selected_employee)
+
+    # Calculate Statistics if an employee is selected
+    stats = {
+        'avg_per_day': 0,
+        'top_function': 'N/A',
+        'function_breakdown': {}
+    }
+
+    if selected_employee and logs_to_display:
+        # Create a DataFrame for easier calculation
+        data = [{'date': l.date, 'function': l.function} for l in logs_to_display if l.date]
+        if data:
+            df = pd.DataFrame(data)
+            
+            # 1. Average files per day
+            daily_counts = df.groupby('date').size()
+            stats['avg_per_day'] = round(daily_counts.mean(), 2)
+            
+            # 2. Top Function & Breakdown
+            if not df['function'].empty:
+                func_counts = df['function'].value_counts()
+                stats['function_breakdown'] = func_counts.to_dict()
+                stats['top_function'] = func_counts.idxmax()
+
+    return render_template('admin/track_employee.html', employees=employees, logs=logs_to_display, selected_employee=selected_employee, stats=stats)
+
+@app.route('/admin/tracker/export')
+@admin_required
+def export_tracker_data():
+    selected_employee = request.args.get('employee')
+    if not selected_employee:
+        flash('Please select an employee to export data.', 'warning')
+        return redirect(url_for('track_employee'))
+
+    # Fetch logs for the selected employee, ordered by date
+    logs = Log.query.filter_by(team_member=selected_employee).order_by(Log.date.asc()).all()
+
+    if not logs:
+        flash(f'No logs found for {selected_employee} to export.', 'info')
+        return redirect(url_for('track_employee', employee=selected_employee))
+
+    # Create a pandas DataFrame from the log data
+    df = pd.DataFrame(
+        [
+            {
+                "Date": log.date.strftime('%Y-%m-%d') if log.date else 'N/A',
+                "Function": log.function,
+                "File Number": log.file_number,
+                "Status": log.status,
+                "Department": log.department,
+                "Comments": log.comments,
+            }
+            for log in logs
+        ]
+    )
+
+    # --- Create Excel Data in Memory ---
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # Sheet 1: Detailed Logs
+        df_details = df[['Date', 'Function', 'File Number', 'Status', 'Department', 'Comments']]
+        df_details.to_excel(writer, sheet_name='Detailed Logs', index=False)
+
+        # Sheet 2: Date-wise file count
+        df_date_summary = df.groupby('Date').size().reset_index(name='Files Count')
+        df_date_summary.to_excel(writer, sheet_name='Daily Summary', index=False)
+
+        # Sheet 3: Function distribution
+        df_func_dist = df['Function'].value_counts().reset_index()
+        df_func_dist.columns = ['Function', 'Count']
+        df_func_dist.to_excel(writer, sheet_name='Function Distribution', index=False)
+
+        # --- Auto-format column widths for readability ---
+        def auto_adjust_columns(sheet_name, dataframe):
+            worksheet = writer.sheets[sheet_name]
+            for idx, col in enumerate(dataframe.columns):
+                series = dataframe[col]
+                max_len = max((
+                    series.astype(str).map(len).max(),
+                    len(str(series.name))
+                )) + 2
+                worksheet.column_dimensions[chr(65 + idx)].width = max_len
+
+        auto_adjust_columns('Detailed Logs', df_details)
+        auto_adjust_columns('Daily Summary', df_date_summary)
+        auto_adjust_columns('Function Distribution', df_func_dist)
+
+    output.seek(0)
+
+    # --- Serve the file for download ---
+    filename = f"{selected_employee}_Tracker_Report_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment;filename={filename}"}
+    )
 
 @app.route('/logo.png')
 def serve_logo():
