@@ -184,6 +184,13 @@
                                         {% endfor %}
                                     </select>
                                 </div>
+                                {% if selected_employee %}
+                                <div class="col-md-4">
+                                    <a href="{{ url_for('export_tracker_data', employee=selected_employee) }}" class="btn btn-success">
+                                        <i class="fas fa-file-excel me-2"></i>Export to Excel
+                                    </a>
+                                </div>
+                                {% endif %}
                             </div>
                         </form>
                     </div>
