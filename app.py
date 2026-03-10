@@ -14,6 +14,9 @@ import dash
 from dash import dcc, html
 import plotly.express as px
 import pandas as pd
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image
+from openpyxl.styles import Font
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
@@ -310,7 +313,18 @@ def init_daily_dashboard(app):
         function_dist_fig = px.pie(function_dist, values=function_dist.values, names=function_dist.index, title='Functions Distribution Today', hole=0.4)
 
         layout = html.Div(className="container-fluid", children=[
-            html.H1(f"Daily Analytics ({today})", className="my-4"),
+            html.Div(className="row align-items-center my-4", children=[
+                html.Div(className="col-md-9", children=[
+                    html.H1(f"Daily Analytics ({today})"),
+                ]),
+                html.Div(className="col-md-3 text-md-end", children=[
+                    html.A(
+                        [html.I(className="fas fa-file-excel me-2"), "Export to Excel"],
+                        href="/admin/daily_analytics/export",
+                        className="btn btn-success",
+                    )
+                ])
+            ]),
 
             # KPI Cards
             html.Div(className="row", children=[
@@ -357,6 +371,87 @@ def init_daily_dashboard(app):
 
     return dash_app.server
 
+@app.route('/admin/daily_analytics/export')
+@admin_required
+def export_daily_analytics():
+    """Exports the daily analytics dashboard to a formatted Excel file."""
+    today = datetime.now().date()
+    logs = Log.query.filter(Log.date == today).all()
+
+    if not logs:
+        flash('No data available for today to export.', 'warning')
+        return redirect('/admin/daily_analytics/')
+
+    df = pd.DataFrame([
+        {"team_member": log.team_member, "function": log.function, "date": log.date, "status": log.status}
+        for log in logs
+    ])
+
+    if df.empty:
+        flash('No data available to display.', 'warning')
+        return redirect('/admin/daily_analytics/')
+
+    # --- 1. Calculate KPIs ---
+    total_logs = len(df)
+    completed_logs = df[df['status'].isin(['Completed', 'Approved'])].shape[0]
+    completion_rate = (completed_logs / total_logs) * 100 if total_logs > 0 else 0
+    top_employee_series = df['team_member'].mode()
+    top_employee = top_employee_series[0] if not top_employee_series.empty else "N/A"
+
+    # --- 2. Generate Figures ---
+    top_functions = df['function'].value_counts().nlargest(10).sort_values(ascending=True)
+    top_functions_fig = px.bar(top_functions, x=top_functions.values, y=top_functions.index, orientation='h', title='Top 10 Functions Today', labels={'x': 'Count', 'y': 'Function'})
+
+    top_employees = df['team_member'].value_counts().nlargest(10).sort_values(ascending=True)
+    top_employees_fig = px.bar(top_employees, x=top_employees.values, y=top_employees.index, orientation='h', title='Top 10 Employees Today', labels={'x': 'Count', 'y': 'Employee'})
+
+    function_dist = df['function'].value_counts()
+    function_dist_fig = px.pie(function_dist, values=function_dist.values, names=function_dist.index, title='Functions Distribution Today', hole=0.4)
+
+    # --- 3. Save Figures to Image Bytes ---
+    img_top_funcs = top_functions_fig.to_image(format="png", width=600, height=400)
+    img_top_emps = top_employees_fig.to_image(format="png", width=600, height=400)
+    img_func_dist = function_dist_fig.to_image(format="png", width=800, height=500)
+
+    # --- 4. Create and Format Excel File in Memory ---
+    output = io.BytesIO()
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "Daily Analytics"
+
+    # Title
+    ws['A1'] = f"Daily Analytics Report for {today.strftime('%Y-%m-%d')}"
+    ws['A1'].font = Font(size=20, bold=True)
+    ws.merge_cells('A1:F1')
+
+    # KPIs
+    ws['A3'] = "Key Performance Indicators"; ws['A3'].font = Font(size=14, bold=True, underline="single")
+    ws['A5'] = "Total Logs Today:"; ws['A5'].font = Font(bold=True)
+    ws['B5'] = total_logs
+    ws['A6'] = "Completion Rate:"; ws['A6'].font = Font(bold=True)
+    ws['B6'] = f"{completion_rate:.2f}%"
+    ws['A7'] = "Top Employee Today:"; ws['A7'].font = Font(bold=True)
+    ws['B7'] = top_employee
+
+    # Graphical Analysis
+    ws['A9'] = "Graphical Analysis"; ws['A9'].font = Font(size=14, bold=True, underline="single")
+    ws['A10'] = "Top 10 Functions by Log Count"; ws['A10'].font = Font(bold=True)
+    ws.add_image(Image(io.BytesIO(img_top_funcs)), 'A11')
+    ws['J10'] = "Top 10 Employees by Log Count"; ws['J10'].font = Font(bold=True)
+    ws.add_image(Image(io.BytesIO(img_top_emps)), 'J11')
+    ws['A34'] = "Overall Function Distribution"; ws['A34'].font = Font(bold=True)
+    ws.add_image(Image(io.BytesIO(img_func_dist)), 'A35')
+
+    workbook.save(output)
+    output.seek(0)
+
+    # --- 5. Serve the file ---
+    filename = f"Daily_Analytics_{today.strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment;filename={filename}"}
+    )
 
 @app.route('/')
 def landing():
