@@ -518,20 +518,59 @@ def employee_update():
             date_str = request.form.get('date')
             log_date = datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else None
 
-            new_log = Log(
-                team_member=session.get('user', 'Guest'),
-                function=request.form.get('function'),
-                date=log_date,
-                file_number=request.form.get('file_number'),
-                status=request.form.get('status'),
-                tier1_escalation_reason=request.form.get('tier1_escalation'),
-                im_escalation_reason=request.form.get('im_escalation'),
-                department=user_department,
-                comments=request.form.get('comments')
-            )
-            db.session.add(new_log)
-            db.session.commit()
-            flash('Work log added successfully!', 'success')
+            team_member = session.get('user', 'Guest')
+            file_number = request.form.get('file_number')
+            status = request.form.get('status')
+
+            # Handle tasks without a file number, or when status is 'In Progress'
+            # These always create a new log entry.
+            if not file_number or status == 'In Progress':
+                # For 'In Progress', check if one already exists to avoid duplicates
+                if file_number and status == 'In Progress':
+                    existing_log = Log.query.filter_by(
+                        team_member=team_member,
+                        file_number=file_number,
+                        status='In Progress'
+                    ).first()
+                    if existing_log:
+                        flash(f"File '{file_number}' is already marked as 'In Progress'. You can update its status by selecting a different status.", 'warning')
+                        return redirect(url_for('employee_update'))
+
+                new_log = Log(
+                    team_member=team_member,
+                    function=request.form.get('function'),
+                    date=log_date,
+                    file_number=file_number,
+                    status=status,
+                    tier1_escalation_reason=request.form.get('tier1_escalation'),
+                    im_escalation_reason=request.form.get('im_escalation'),
+                    department=user_department,
+                    comments=request.form.get('comments')
+                )
+                db.session.add(new_log)
+                db.session.commit()
+                flash('Work log added successfully!', 'success')
+
+            # Handle status updates for existing 'In Progress' files
+            else:  # file_number exists and status is not 'In Progress'
+                log_to_update = Log.query.filter_by(
+                    team_member=team_member,
+                    file_number=file_number,
+                    status='In Progress'
+                ).first()
+
+                if log_to_update:
+                    # Update the existing log entry
+                    log_to_update.status = status
+                    log_to_update.date = log_date
+                    log_to_update.tier1_escalation_reason = request.form.get('tier1_escalation')
+                    log_to_update.im_escalation_reason = request.form.get('im_escalation')
+                    log_to_update.comments = request.form.get('comments')
+                    db.session.commit()
+                    flash(f"Work log for file '{file_number}' updated to '{status}'.", 'success')
+                else:
+                    # No 'In Progress' log found to update.
+                    flash(f"Error: You must first log file '{file_number}' with 'In Progress' status before setting it to '{status}'.", 'danger')
             
         except Exception as e:
             db.session.rollback()
