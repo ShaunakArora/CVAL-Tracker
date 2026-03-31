@@ -60,6 +60,11 @@ class Log(db.Model):
     im_escalation_reason = db.Column(db.String(200))
     department = db.Column(db.String(80))
     comments = db.Column(db.Text)
+    count = db.Column(db.String(50))
+    bucket = db.Column(db.String(100))
+    time = db.Column(db.String(50))
+    production_task = db.Column(db.String(100))
+    month = db.Column(db.String(50))
 
 class Alert(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -471,10 +476,11 @@ def summary():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form.get('username')
+        username = request.form.get('username', '').strip()
         password = request.form.get('password')
 
-        user = User.query.filter_by(username=username).first()
+        # Case-insensitive username lookup
+        user = User.query.filter(func.lower(User.username) == username.lower()).first()
 
         if user and check_password_hash(user.password, password):
             session['user'] = user.username
@@ -504,6 +510,9 @@ def logout():
 @app.route('/employee/update', methods=['GET', 'POST'])
 @login_required
 def employee_update():
+    current_user = User.query.filter_by(username=session.get('user')).first()
+    user_department = current_user.department if current_user else ""
+
     if request.method == 'POST':
         try:
             date_str = request.form.get('date')
@@ -517,7 +526,7 @@ def employee_update():
                 status=request.form.get('status'),
                 tier1_escalation_reason=request.form.get('tier1_escalation'),
                 im_escalation_reason=request.form.get('im_escalation'),
-                department=request.form.get('department'),
+                department=user_department,
                 comments=request.form.get('comments')
             )
             db.session.add(new_log)
@@ -536,7 +545,7 @@ def employee_update():
         Log.id.desc()
     ).all()
 
-    return render_template('employee/update_work.html', employee_name=session.get('user', 'Guest'), logs=logs)
+    return render_template('employee/update_work.html', employee_name=session.get('user', 'Guest'), logs=logs, user_department=user_department)
 
 @app.route('/employee/dashboard')
 @login_required
@@ -593,7 +602,7 @@ def admin_dashboard():
 @admin_required
 def create_employee():
     if request.method == 'POST':
-        username = request.form.get('team_member')
+        username = request.form.get('team_member', '').strip()
         department = request.form.get('department')
         role = request.form.get('role')
         shift = request.form.get('shift')
@@ -608,7 +617,7 @@ def create_employee():
             flash('Password must be at least 8 characters long.', 'danger')
             return redirect(url_for('create_employee'))
 
-        existing_user = User.query.filter_by(username=username).first()
+        existing_user = User.query.filter(func.lower(User.username) == username.lower()).first()
         if existing_user:
             flash(f'Employee "{username}" already exists.', 'danger')
             return redirect(url_for('create_employee'))
@@ -822,8 +831,8 @@ def init_db_command():
 
 @app.cli.command("import-data")
 def import_data_command():
-    """Imports data from existing JSON files into the database."""
-    
+    """Imports data from existing JSON and CSV files into the database."""
+
     # Import Users
     users_file = os.path.join(BASE_DIR, 'users.json')
     if os.path.exists(users_file):
@@ -837,7 +846,7 @@ def import_data_command():
                             created_at = datetime.strptime(u_data['created_at'], '%Y-%m-%d %H:%M:%S')
                         except ValueError:
                             pass
-                    
+
                     user = User(
                         username=u_data['username'],
                         password=u_data['password'], # Already hashed in JSON
@@ -863,7 +872,7 @@ def import_data_command():
                         log_date = datetime.strptime(l_data['Date'], '%Y-%m-%d').date()
                     except ValueError:
                         pass
-                
+
                 log = Log(
                     team_member=l_data.get('Team Member'),
                     function=l_data.get('Function'),
@@ -879,6 +888,79 @@ def import_data_command():
             db.session.commit()
             print(f"Imported logs from {data_file}")
 
+    # Import Logs from CSV
+    csv_data_file = os.path.join(BASE_DIR, 'raw_data.csv')
+    if os.path.exists(csv_data_file):
+        try:
+            df_raw = pd.read_csv(csv_data_file, encoding='cp1252')
+            # Replace NaN with None for database compatibility
+            df = df_raw.where(pd.notnull(df_raw), None)
+
+            # --- Create New Users from CSV if they don't exist ---
+            # Get existing usernames from DB to avoid creating duplicates
+            existing_usernames = {user.username for user in User.query.all()}
+            
+            # Find unique team members in the CSV who are not yet users
+            if 'Team Member' in df.columns:
+                # Get unique, non-null team member names from the CSV
+                csv_team_members = df.dropna(subset=['Team Member'])['Team Member'].unique()
+                new_user_names = set(csv_team_members) - existing_usernames
+
+                if new_user_names:
+                    print(f"Found {len(new_user_names)} new users to import from CSV.")
+                    # Get the first row of data for each new user to pull details
+                    new_users_data = df[df['Team Member'].isin(new_user_names)].drop_duplicates(subset=['Team Member'])
+
+                    for _, user_data in new_users_data.iterrows():
+                        username = user_data['Team Member']
+                        hashed_password = generate_password_hash('password') # Default password
+                        
+                        new_user = User(
+                            username=username,
+                            password=hashed_password,
+                            role='employee', # Default role
+                            department=user_data.get('Department'),
+                            shift=user_data.get('Shift'),
+                            location=user_data.get('Location'),
+                            created_at=datetime.now()
+                        )
+                        db.session.add(new_user)
+                        print(f"Staged new user for creation: '{username}' with default password 'password'")
+                    
+                    db.session.commit() # Commit new users before adding logs
+
+            # --- Import all logs from the CSV ---
+            for index, l_data in df.iterrows():
+                log_date = None
+                date_val = l_data.get('Date')
+                if date_val:
+                    try:
+                        log_date = pd.to_datetime(date_val).date()
+                    except (ValueError, TypeError):
+                        print(f"Could not parse date: {date_val}")
+                        pass
+
+                # Create and add the log entry
+                db.session.add(Log(
+                    team_member=l_data.get('Team Member'),
+                    function=l_data.get('Function'),
+                    date=log_date,
+                    file_number=str(l_data.get('File  Number')) if l_data.get('File  Number') is not None else None,
+                    status=l_data.get('Status'),
+                    tier1_escalation_reason=l_data.get('Escalation Reason'),
+                    department=l_data.get('Department'),
+                    count=str(l_data.get('Count')) if l_data.get('Count') is not None else None,
+                    bucket=str(l_data.get('Bucket')) if l_data.get('Bucket') is not None else None,
+                    time=str(l_data.get('Time')) if l_data.get('Time') is not None else None,
+                    production_task=str(l_data.get('Production Task')) if l_data.get('Production Task') is not None else None,
+                    month=str(l_data.get('Month')) if l_data.get('Month') is not None else None
+                ))
+            db.session.commit()
+            print(f"Imported logs from {csv_data_file}")
+        except Exception as e:
+            db.session.rollback()
+            print(f"Error importing data from {csv_data_file}: {e}")
+
     # Import Alerts
     alerts_file = os.path.join(BASE_DIR, 'alerts.json')
     if os.path.exists(alerts_file):
@@ -891,7 +973,7 @@ def import_data_command():
                         timestamp = datetime.strptime(a_data['timestamp'], '%Y-%m-%d %H:%M:%S')
                     except ValueError:
                         pass
-                
+
                 alert = Alert(
                     message=a_data.get('message'),
                     timestamp=timestamp
