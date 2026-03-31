@@ -213,8 +213,8 @@
                                     </select>
                                 </div>
                                 <div class="col-md-6">
-                                    <label for="department" class="form-label">Department</label>
-                                    <input type="text" class="form-control" id="department" name="department" placeholder="e.g. Operations">
+                                    <label class="form-label">Department</label>
+                                    <p class="form-control-plaintext fw-bold fs-5">{{ user_department }}</p>
                                 </div>
                                 <div class="col-md-6">
                                     <label for="file_number" class="form-label">File Number</label>
@@ -223,10 +223,11 @@
                                 <div class="col-md-6">
                                     <label for="status" class="form-label">Status</label>
                                     <select class="form-select" id="status" name="status">
+                                        <option value="In Progress" selected>In Progress</option>
+                                        <option value="Completed">Completed</option>
                                         <option value="Approved">Approved</option>
                                         <option value="Escalated">Escalated</option>
                                         <option value="Rerouted">Rerouted</option>
-                                        <option value="In Progress">In Progress</option>
                                         <option value="Pending">Pending</option>
                                     </select>
                                 </div>
