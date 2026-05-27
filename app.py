@@ -522,20 +522,22 @@ def employee_update():
             file_number = request.form.get('file_number')
             status = request.form.get('status')
 
+            # When trying to log a new task as 'In Progress'
+            if status == 'In Progress':
+                # Get the latest log entry for this employee
+                latest_log = Log.query.filter_by(
+                    team_member=team_member,
+                ).order_by(Log.id.desc()).first()
+
+                # Check if their latest task is still 'In Progress'
+                if latest_log and latest_log.status == 'In Progress':
+                    flash(f"You cannot start a new file. Your latest task for file '{latest_log.file_number}' is still 'In Progress'.", 'danger')
+                    return redirect(url_for('employee_update'))
+
             # Handle tasks without a file number, or when status is 'In Progress'
             # These always create a new log entry.
             if not file_number or status == 'In Progress':
-                # For 'In Progress', check if one already exists to avoid duplicates
-                if file_number and status == 'In Progress':
-                    existing_log = Log.query.filter_by(
-                        team_member=team_member,
-                        file_number=file_number,
-                        status='In Progress'
-                    ).first()
-                    if existing_log:
-                        flash(f"File '{file_number}' is already marked as 'In Progress'. You can update its status by selecting a different status.", 'warning')
-                        return redirect(url_for('employee_update'))
-
+                # The check for duplicates is now handled above.
                 new_log = Log(
                     team_member=team_member,
                     function=request.form.get('function'),
