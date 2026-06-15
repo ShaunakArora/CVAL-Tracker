@@ -138,6 +138,15 @@
                 <a href="/admin/analytics/" class="list-group-item">
                     <i class="fas fa-chart-line"></i> Analytics Dashboard
                 </a>
+                <a href="/admin/daily_analytics/" class="list-group-item">
+                    <i class="fas fa-calendar-day"></i> Daily Analytics
+                </a>
+                <a href="/admin/production_report" class="list-group-item">
+                    <i class="fas fa-file-alt"></i> Production Reports
+                </a>
+                <a href="/admin/functions" class="list-group-item">
+                    <i class="fas fa-cogs"></i> Functions & Departments
+                </a>
                 <a href="/admin/create_employee" class="list-group-item active">
                     <i class="fas fa-user-plus"></i> Create Employee
                 </a>
@@ -180,8 +189,17 @@
                                 <input type="text" class="form-control" id="team_member" name="team_member" required>
                             </div>
                             <div class="mb-3">
+                                <label for="employee_id" class="form-label">Employee ID</label>
+                                <input type="text" class="form-control" id="employee_id" name="employee_id" required>
+                            </div>
+                            <div class="mb-3">
                                 <label for="department" class="form-label">Department</label>
-                                <input type="text" class="form-control" id="department" name="department" required>
+                                <select class="form-select" id="department" name="department" required>
+                                    <option value="" selected disabled>Select Department</option>
+                                    {% for dept in departments %}
+                                    <option value="{{ dept }}">{{ dept }}</option>
+                                    {% endfor %}
+                                </select>
                             </div>
                             <div class="mb-3">
                                 <label for="role" class="form-label">Role</label>
