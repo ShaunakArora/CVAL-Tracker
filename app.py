@@ -9,7 +9,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from flask_wtf.csrf import CSRFProtect
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func
+from sqlalchemy import func, extract, text
 import dash
 from dash import dcc, html
 import plotly.express as px
@@ -41,6 +41,7 @@ csrf = CSRFProtect(app)
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.String(50), unique=True, nullable=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=False)
     role = db.Column(db.String(20), nullable=False, default='employee')
@@ -54,8 +55,8 @@ class Log(db.Model):
     team_member = db.Column(db.String(80), nullable=False)
     function = db.Column(db.String(100))
     date = db.Column(db.Date)
-    file_number = db.Column(db.String(50))
-    status = db.Column(db.String(50))
+    file_number = db.Column(db.String(100))
+    status = db.Column(db.String(100))
     tier1_escalation_reason = db.Column(db.String(200))
     im_escalation_reason = db.Column(db.String(200))
     department = db.Column(db.String(80))
@@ -71,25 +72,16 @@ class Alert(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     message = db.Column(db.String(500), nullable=False)
 
-ALL_FUNCTIONS = [
-    "VI 3D Scan Pro",
-    "VI 3D Desktop Pro",
-    "Full Review",
-    "Full Revision",
-    "Short Review",
-    "Short Revision",
-    "VI Second Review",
-    "Digital Operations - Sourcing",
-    "Full Reports",
-    "QCF (Underwriter Queue)",
-    "Full Review (CI Abridged)",
-    "CMP Client Import",
-    "Text Followup",
-    "ACR",
-    "DNU Checklist Update",
-    "PDC Compliance",
-    "Meetings/Training"
-]
+class Function(db.Model):
+    __tablename__ = 'functions'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+
+class Department(db.Model):
+    __tablename__ = 'department'
+    id = db.Column(db.Integer, primary_key=True)
+    dept_name = db.Column(db.String(100), unique=True, nullable=False)
+
 
 def add_system_alert(message):
     """Adds a system alert to the database and keeps the latest 50."""
@@ -586,7 +578,9 @@ def employee_update():
         Log.id.desc()
     ).all()
 
-    return render_template('employee/update_work.html', employee_name=session.get('user', 'Guest'), logs=logs, user_department=user_department)
+    functions = [f.name for f in Function.query.order_by(Function.name).all()]
+
+    return render_template('employee/update_work.html', employee_name=session.get('user', 'Guest'), logs=logs, user_department=user_department, functions=functions)
 
 @app.route('/employee/dashboard')
 @login_required
@@ -605,7 +599,8 @@ def employee_summary():
 
     logs = Log.query.filter_by(team_member=session.get('user')).all()
 
-    summary_counts = {func: 0 for func in ALL_FUNCTIONS}
+    all_functions = [f.name for f in Function.query.order_by(Function.name).all()]
+    summary_counts = {func: 0 for func in all_functions}
     for log in logs:
         function = log.function
         if function in summary_counts:
@@ -624,7 +619,8 @@ def admin_summary():
     # Using a more efficient query
     summary_counts_query = db.session.query(Log.function, func.count(Log.function)).group_by(Log.function).all()
     
-    summary_counts = {func: 0 for func in ALL_FUNCTIONS}
+    all_functions = [f.name for f in Function.query.order_by(Function.name).all()]
+    summary_counts = {func: 0 for func in all_functions}
     for function, count in summary_counts_query:
         if function in summary_counts:
             summary_counts[function] = count
@@ -639,18 +635,74 @@ def admin_dashboard():
     alerts = Alert.query.order_by(Alert.timestamp.desc()).all()
     return render_template('admin/dashboard.html', alerts=alerts)
 
+@app.route('/admin/functions', methods=['GET', 'POST'])
+@admin_required
+def manage_functions():
+    if request.method == 'POST':
+        function_name = request.form.get('name', '').strip()
+        if not function_name:
+            flash('Function name cannot be empty.', 'danger')
+        elif Function.query.filter(func.lower(Function.name) == function_name.lower()).first():
+            flash(f'Function "{function_name}" already exists.', 'danger')
+        else:
+            new_function = Function(name=function_name)
+            db.session.add(new_function)
+            db.session.commit()
+            flash(f'Function "{function_name}" created successfully.', 'success')
+        return redirect(url_for('manage_functions'))
+
+    functions = Function.query.order_by(Function.name).all()
+    
+    # Get department names from the Department table
+    departments_query = Department.query.order_by(Department.dept_name).all()
+    departments = [d.dept_name for d in departments_query if d.dept_name and d.dept_name.strip()]
+    return render_template('admin/functions.html', functions=functions, departments=departments)
+
+@app.route('/admin/functions/edit/<int:id>', methods=['POST'])
+@admin_required
+def edit_function(id):
+    function_to_edit = Function.query.get_or_404(id)
+    new_name = request.form.get('name', '').strip()
+
+    if not new_name:
+        flash('Function name cannot be empty.', 'danger')
+    else:
+        existing_function = Function.query.filter(func.lower(Function.name) == new_name.lower()).first()
+        if existing_function and existing_function.id != id:
+            flash(f'Function "{new_name}" already exists.', 'danger')
+        else:
+            old_name = function_to_edit.name
+            Log.query.filter_by(function=old_name).update({'function': new_name})
+            function_to_edit.name = new_name
+            db.session.commit()
+            flash(f'Function updated from "{old_name}" to "{new_name}".', 'success')
+    return redirect(url_for('manage_functions'))
+
+@app.route('/admin/functions/delete/<int:id>', methods=['POST'])
+@admin_required
+def delete_function(id):
+    function_to_delete = Function.query.get_or_404(id)
+    if Log.query.filter_by(function=function_to_delete.name).first():
+        flash(f'Cannot delete function "{function_to_delete.name}" because it is in use in logs. Please edit it instead.', 'danger')
+    else:
+        db.session.delete(function_to_delete)
+        db.session.commit()
+        flash(f'Function "{function_to_delete.name}" has been deleted.', 'success')
+    return redirect(url_for('manage_functions'))
+
 @app.route('/admin/create_employee', methods=['GET', 'POST'])
 @admin_required
 def create_employee():
     if request.method == 'POST':
         username = request.form.get('team_member', '').strip()
+        employee_id = request.form.get('employee_id', '').strip()
         department = request.form.get('department')
         role = request.form.get('role')
         shift = request.form.get('shift')
         location = request.form.get('location')
         password = request.form.get('password')
 
-        if not all([username, department, role, shift, location, password]):
+        if not all([username, employee_id, department, role, shift, location, password]):
             flash('All fields are required.', 'danger')
             return redirect(url_for('create_employee'))
 
@@ -658,15 +710,18 @@ def create_employee():
             flash('Password must be at least 8 characters long.', 'danger')
             return redirect(url_for('create_employee'))
 
-        existing_user = User.query.filter(func.lower(User.username) == username.lower()).first()
+        existing_user = User.query.filter(
+            (func.lower(User.username) == username.lower()) | (User.employee_id == employee_id)
+        ).first()
         if existing_user:
-            flash(f'Employee "{username}" already exists.', 'danger')
+            flash(f'Employee with name "{username}" or ID "{employee_id}" already exists.', 'danger')
             return redirect(url_for('create_employee'))
 
         hashed_password = generate_password_hash(password)
         
         new_user = User(
             username=username,
+            employee_id=employee_id,
             department=department,
             role=role,
             shift=shift,
@@ -679,7 +734,9 @@ def create_employee():
         flash(f'Employee "{username}" created successfully!', 'success')
         return redirect(url_for('view_employees'))
 
-    return render_template('admin/create_employee.html')
+    departments = [d.dept_name for d in Department.query.order_by(Department.dept_name).all()]
+
+    return render_template('admin/create_employee.html', departments=departments)
 
 @app.route('/admin/view_employees')
 @admin_required
@@ -705,6 +762,7 @@ def view_employees():
             status = 'Active'
 
         employees.append({
+            'Employee ID': user.employee_id or 'N/A',
             'Team Member': user.username,
             'Department': user.department,
             'Shift': user.shift,
@@ -714,6 +772,149 @@ def view_employees():
         })
     return render_template('admin/view_employees.html', 
                            employees=employees)
+
+@app.route('/admin/production_report')
+@admin_required
+def production_report():
+    from calendar import monthrange
+
+    # --- Date-wise Production Data ---
+    today = datetime.utcnow()
+    # Allow overriding month/year via query params for filtering
+    try:
+        year = int(request.args.get('year', today.year))
+        month = int(request.args.get('month', today.month))
+        # Basic validation
+        if not (1 <= month <= 12):
+            month = today.month
+        if not (2020 <= year <= today.year):
+            year = today.year
+    except (ValueError, TypeError):
+        year = today.year
+        month = today.month
+
+    # Get number of days in the selected month
+    num_days = monthrange(year, month)[1]
+    days_in_month = list(range(1, num_days + 1))
+
+    # Get all departments
+    departments = Department.query.order_by(Department.dept_name).all()
+    dept_names = [d.dept_name for d in departments if d.dept_name]
+
+    # Query for logs in the selected month
+    daily_counts_query = db.session.query(
+        Log.department,
+        extract('day', Log.date).label('day'),
+        func.count(Log.id).label('count')
+    ).filter(
+        extract('year', Log.date) == year,
+        extract('month', Log.date) == month,
+        Log.department.in_(dept_names)
+    ).group_by(Log.department, extract('day', Log.date)).all()
+
+    # Process data into a pivot-table like structure
+    data = {dept: {day: 0 for day in days_in_month} for dept in dept_names}
+    for department, day, count in daily_counts_query:
+        if department in data and day in data[department]:
+            data[department][int(day)] = count
+
+    # Prepare final list for template, including totals
+    production_by_date = []
+    for dept_name, daily_counts in data.items():
+        production_by_date.append({
+            'department': dept_name,
+            'days': daily_counts,
+            'total': sum(daily_counts.values())
+        })
+
+    month_name = datetime(year, month, 1).strftime('%B')
+    years = list(range(today.year, 2019, -1))
+    months = {i: datetime(2000, i, 1).strftime('%B') for i in range(1, 13)}
+    
+    return render_template('admin/production_report.html', production_by_date=production_by_date, days_in_month=days_in_month, month_name=month_name, selected_year=year, selected_month=month, years=years, months=months)
+
+@app.route('/admin/production_by_department')
+@admin_required
+def production_by_department():
+    # Get all departments from the master Department table
+    departments = Department.query.order_by(Department.dept_name).all()
+
+    # Get total logs per department in a single query
+    dept_logs_query = db.session.query(
+        Log.department,
+        func.count(Log.id)
+    ).group_by(Log.department).all()
+    dept_logs_map = dict(dept_logs_query)
+
+    # Efficiently get the top function for each department using a window function
+    # This avoids making a query for each department inside a loop (N+1 problem)
+    
+    # Subquery to count functions per department
+    log_counts_subquery = db.session.query(
+        Log.department,
+        Log.function,
+        func.count(Log.id).label('function_count')
+    ).filter(Log.department.isnot(None)).group_by(Log.department, Log.function).subquery()
+
+    # Window function to rank functions within each department
+    ranked_logs_subquery = db.session.query(
+        log_counts_subquery.c.department,
+        log_counts_subquery.c.function,
+        func.row_number().over(
+            partition_by=log_counts_subquery.c.department,
+            order_by=log_counts_subquery.c.function_count.desc()
+        ).label('rn')
+    ).subquery()
+
+    # Select only the top-ranked function (rn=1) for each department
+    top_functions_query = db.session.query(
+        ranked_logs_subquery.c.department,
+        ranked_logs_subquery.c.function
+    ).filter(ranked_logs_subquery.c.rn == 1).all()
+    top_functions_map = dict(top_functions_query)
+
+    department_stats = []
+    for dept in departments:
+        dept_name = dept.dept_name
+        department_stats.append({
+            'department': dept_name,
+            'total_logs': dept_logs_map.get(dept_name, 0),
+            'top_function': top_functions_map.get(dept_name)
+        })
+
+    return render_template('admin/production_by_department.html', department_stats=department_stats)
+
+@app.route('/admin/team_member_performance')
+@admin_required
+def team_member_performance():
+    # Get all employee users
+    users = User.query.filter(User.role == 'employee').order_by(User.username).all()
+    
+    # Get performance stats in one subquery
+    performance_query = db.session.query(
+        Log.team_member,
+        func.count(Log.id).label('total_logs'),
+        func.count(func.distinct(Log.date)).label('active_days'),
+        func.max(Log.date).label('last_log_date')
+    ).group_by(Log.team_member).subquery()
+
+    # Create a dictionary for easy lookup
+    performance_stats = {
+        row.team_member: {
+            'total_logs': row.total_logs,
+            'active_days': row.active_days,
+            'last_log_date': row.last_log_date,
+            'avg_per_day': (row.total_logs / row.active_days) if row.active_days > 0 else 0
+        }
+        for row in db.session.query(performance_query).all()
+    }
+
+    performance_data = []
+    for user in users:
+        stats = performance_stats.get(user.username, {'total_logs': 0, 'avg_per_day': 0, 'last_log_date': None})
+        performance_data.append({'username': user.username, 'department': user.department, **stats})
+
+    return render_template('admin/team_member_performance.html', performance_data=performance_data)
 
 @app.route('/admin/tracker')
 @admin_required
@@ -831,7 +1032,8 @@ def chart_data():
             func.count(Log.id)
         ).group_by(Log.date, Log.function).all()
 
-        columns = ALL_FUNCTIONS + ["Total Hours"] # Total Hours seems unused, keeping for compatibility
+        all_functions = [f.name for f in Function.query.order_by(Function.name).all()]
+        columns = all_functions + ["Total Hours"] # Total Hours seems unused, keeping for compatibility
 
         # Aggregate data by Date
         aggregated_data = {}
@@ -870,158 +1072,208 @@ def init_db_command():
     else:
         print("Database already initialized.")
 
+    if not Function.query.first():
+        print("Populating functions table...")
+        default_functions = [
+            "VI 3D Scan Pro", "VI 3D Desktop Pro", "Full Review", "Full Revision",
+            "Short Review", "Short Revision", "VI Second Review",
+            "Digital Operations - Sourcing", "Full Reports", "QCF (Underwriter Queue)",
+            "Full Review (CI Abridged)", "CMP Client Import", "Text Followup", "ACR",
+            "DNU Checklist Update", "PDC Compliance", "Meetings/Training"
+        ]
+        for func_name in default_functions:
+            db.session.add(Function(name=func_name))
+        db.session.commit()
+        print("Functions table populated.")
+
+    if not Department.query.first():
+        print("Populating department table...")
+        default_departments = [
+            'Alternative Products',
+            'Assigning',
+            'Bluebird QC',
+            'Client Services',
+            'Digital',
+            'Management',
+            'Quality Control',
+            'Staff Direct',
+            'Training',
+            'Vendor Relations'
+        ]
+        for dept_name in default_departments:
+            db.session.add(Department(dept_name=dept_name))
+        db.session.commit()
+        print("Department table populated.")
+
 @app.cli.command("import-data")
 def import_data_command():
-    """Imports data from existing JSON and CSV files into the database."""
+    """Deletes and re-imports users from the production report, then imports other data."""
+    new_report_file = os.path.join(BASE_DIR, 'Production & Performance Report Till  May 28th 2026.xlsx')
+    if not os.path.exists(new_report_file):
+        print(f"Report file not found: {new_report_file}. Skipping user import.")
+        return
 
-    # Import Users
-    users_file = os.path.join(BASE_DIR, 'users.json')
-    if os.path.exists(users_file):
-        with open(users_file, 'r') as f:
-            users_data = json.load(f)
-            for u_data in users_data:
-                if not User.query.filter_by(username=u_data['username']).first():
-                    created_at = datetime.utcnow()
-                    if 'created_at' in u_data:
-                        try:
-                            created_at = datetime.strptime(u_data['created_at'], '%Y-%m-%d %H:%M:%S')
-                        except ValueError:
-                            pass
-
-                    user = User(
-                        username=u_data['username'],
-                        password=u_data['password'], # Already hashed in JSON
-                        role=u_data['role'],
-                        department=u_data.get('department'),
-                        shift=u_data.get('shift'),
-                        location=u_data.get('location'),
-                        created_at=created_at
-                    )
-                    db.session.add(user)
-            db.session.commit()
-            print(f"Imported users from {users_file}")
-
-    # Import Logs
-    data_file = os.path.join(BASE_DIR, 'data.json')
-    if os.path.exists(data_file):
-        with open(data_file, 'r') as f:
-            logs_data = json.load(f)
-            for l_data in logs_data:
-                log_date = None
-                if l_data.get('Date'):
-                    try:
-                        log_date = datetime.strptime(l_data['Date'], '%Y-%m-%d').date()
-                    except ValueError:
-                        pass
-
-                log = Log(
-                    team_member=l_data.get('Team Member'),
-                    function=l_data.get('Function'),
-                    date=log_date,
-                    file_number=l_data.get('File Number'),
-                    status=l_data.get('Status'),
-                    tier1_escalation_reason=l_data.get('Tier 1 Escalation Reason'),
-                    im_escalation_reason=l_data.get('IM Escalation Reason'),
-                    department=l_data.get('Department'),
-                    comments=l_data.get('Comments')
-                )
-                db.session.add(log)
-            db.session.commit()
-            print(f"Imported logs from {data_file}")
-
-    # Import Logs from CSV
-    csv_data_file = os.path.join(BASE_DIR, 'raw_data.csv')
-    if os.path.exists(csv_data_file):
-        try:
-            df_raw = pd.read_csv(csv_data_file, encoding='cp1252')
-            # Replace NaN with None for database compatibility
-            df = df_raw.where(pd.notnull(df_raw), None)
-
-            # --- Create New Users from CSV if they don't exist ---
-            # Get existing usernames from DB to avoid creating duplicates
-            existing_usernames = {user.username for user in User.query.all()}
+    print(f"--- Starting User Import from: {new_report_file} ---")
+    try:
+        # 1. Read both sheets from the Excel file
+        xls = pd.ExcelFile(new_report_file)
+        if 'Team Member Performance' not in xls.sheet_names:
+            print("Error: Sheet 'Team Member Performance' not found in the Excel file. Aborting.")
+            print(f"Available sheets: {xls.sheet_names}")
+            return
+        if 'Raw Data' not in xls.sheet_names:
+            print("Error: Sheet 'Raw Data' not found in the Excel file. Aborting.")
+            print(f"Available sheets: {xls.sheet_names}")
+            return
             
-            # Find unique team members in the CSV who are not yet users
-            if 'Team Member' in df.columns:
-                # Get unique, non-null team member names from the CSV
-                csv_team_members = df.dropna(subset=['Team Member'])['Team Member'].unique()
-                new_user_names = set(csv_team_members) - existing_usernames
+        df_performance = pd.read_excel(xls, sheet_name='Team Member Performance')
+        df_raw = pd.read_excel(xls, sheet_name='Raw Data')
 
-                if new_user_names:
-                    print(f"Found {len(new_user_names)} new users to import from CSV.")
-                    # Get the first row of data for each new user to pull details
-                    new_users_data = df[df['Team Member'].isin(new_user_names)].drop_duplicates(subset=['Team Member'])
+        # Clean column names
+        df_performance.columns = df_performance.columns.str.strip()
+        df_raw.columns = df_raw.columns.str.strip()
 
-                    for _, user_data in new_users_data.iterrows():
-                        username = user_data['Team Member']
-                        hashed_password = generate_password_hash('password') # Default password
-                        
-                        new_user = User(
-                            username=username,
-                            password=hashed_password,
-                            role='employee', # Default role
-                            department=user_data.get('Department'),
-                            shift=user_data.get('Shift'),
-                            location=user_data.get('Location'),
-                            created_at=datetime.now()
-                        )
-                        db.session.add(new_user)
-                        print(f"Staged new user for creation: '{username}' with default password 'password'")
-                    
-                    db.session.commit() # Commit new users before adding logs
+        # 2. Check for required columns in the performance sheet
+        required_cols = ['Branch', 'Team Member (First Last)', 'Employee ID', 'Shift']
+        if not all(col in df_performance.columns for col in required_cols):
+            print(f"Error: 'Team Member Performance' sheet is missing one of the required columns: {required_cols}.")
+            print(f"Columns found: {list(df_performance.columns)}")
+            return
 
-            # --- Import all logs from the CSV ---
-            for index, l_data in df.iterrows():
-                log_date = None
-                date_val = l_data.get('Date')
-                if date_val:
-                    try:
-                        log_date = pd.to_datetime(date_val).date()
-                    except (ValueError, TypeError):
-                        print(f"Could not parse date: {date_val}")
-                        pass
+        # 3. Create a department mapping from the raw data sheet
+        department_map = {}
+        # Corrected column names for department mapping
+        raw_team_member_col = 'Team Member (First Last)'
+        raw_dept_col = 'Department'
+        if raw_team_member_col in df_raw.columns and raw_dept_col in df_raw.columns:
+            df_departments = df_raw[[raw_team_member_col, raw_dept_col]].dropna(subset=[raw_team_member_col, raw_dept_col])
+            df_departments[raw_team_member_col] = df_departments[raw_team_member_col].str.strip()
+            department_map = df_departments.drop_duplicates(subset=[raw_team_member_col], keep='first').set_index(raw_team_member_col)[raw_dept_col].to_dict()
+            print(f"Created a mapping for {len(department_map)} departments from 'Raw Data' sheet.")
+        else:
+            print(f"Warning: 'Raw Data' sheet is missing '{raw_team_member_col}' or '{raw_dept_col}' columns. Departments will not be imported.")
+            print(f"Columns found in 'Raw Data' sheet: {list(df_raw.columns)}")
 
-                # Create and add the log entry
-                db.session.add(Log(
-                    team_member=l_data.get('Team Member'),
-                    function=l_data.get('Function'),
-                    date=log_date,
-                    file_number=str(l_data.get('File  Number')) if l_data.get('File  Number') is not None else None,
-                    status=l_data.get('Status'),
-                    tier1_escalation_reason=l_data.get('Escalation Reason'),
-                    department=l_data.get('Department'),
-                    count=str(l_data.get('Count')) if l_data.get('Count') is not None else None,
-                    bucket=str(l_data.get('Bucket')) if l_data.get('Bucket') is not None else None,
-                    time=str(l_data.get('Time')) if l_data.get('Time') is not None else None,
-                    production_task=str(l_data.get('Production Task')) if l_data.get('Production Task') is not None else None,
-                    month=str(l_data.get('Month')) if l_data.get('Month') is not None else None
-                ))
-            db.session.commit()
-            print(f"Imported logs from {csv_data_file}")
-        except Exception as e:
-            db.session.rollback()
-            print(f"Error importing data from {csv_data_file}: {e}")
+        # 4. Filter for Vadodara branch
+        df_vadodara = df_performance[df_performance['Branch'] == 'Vadodara'].copy()
+        print(f"Found {len(df_vadodara)} users for 'Vadodara' branch.")
 
-    # Import Alerts
-    alerts_file = os.path.join(BASE_DIR, 'alerts.json')
-    if os.path.exists(alerts_file):
-        with open(alerts_file, 'r') as f:
-            alerts_data = json.load(f)
-            for a_data in alerts_data:
-                timestamp = datetime.utcnow()
-                if a_data.get('timestamp'):
-                    try:
-                        timestamp = datetime.strptime(a_data['timestamp'], '%Y-%m-%d %H:%M:%S')
-                    except ValueError:
-                        pass
+        # 5. Delete existing users (preserving the 'admin' user)
+        num_deleted = User.query.filter(User.role != 'admin').delete()
+        db.session.commit()
+        print(f"Deleted {num_deleted} existing non-admin users.")
 
-                alert = Alert(
-                    message=a_data.get('message'),
-                    timestamp=timestamp
-                )
-                db.session.add(alert)
-            db.session.commit()
-            print(f"Imported alerts from {alerts_file}")
+        # 6. Iterate and create new users
+        users_added = 0
+        for _, row in df_vadodara.iterrows():
+            username = str(row.get('Team Member (First Last)', '')).strip()
+            employee_id = str(row.get('Employee ID', '')).strip()
+
+            if not username or not employee_id or username.lower() in ['nan', '']:
+                continue
+            
+            department = department_map.get(username)
+            hashed_password = generate_password_hash('password')
+
+            new_user = User(username=username, employee_id=employee_id, password=hashed_password, role='employee', department=department, shift=str(row.get('Shift', '')).strip(), location='Vadodara', created_at=datetime.now())
+            db.session.add(new_user)
+            users_added += 1
+        
+        db.session.commit()
+        print(f"--- Successfully imported {users_added} new users. ---")
+
+        # --- Import Log Data ---
+        print("\n--- Starting Log Data Import from 'Raw Data' sheet ---")
+        # 1. Drop and recreate the Log table to ensure the schema is up-to-date with the model.
+        # This is a more forceful drop to handle potential stale schema issues.
+        print("Synchronizing Log table schema...")
+        db.session.execute(text('DROP TABLE IF EXISTS log CASCADE;'))
+        db.session.commit()
+        db.create_all() # Recreates the table based on the current model definition
+        print("Log table schema is up-to-date.")
+
+        # 2. Check for required columns in the raw data sheet
+        # Corrected required column names for logs
+        required_log_cols = ['Team Member (First Last)', 'Date (mm/dd/yy)', 'Function']
+        if not all(col in df_raw.columns for col in required_log_cols):
+            print(f"Error: 'Raw Data' sheet is missing one of the required columns for logs: {required_log_cols}.")
+            print(f"Columns found: {list(df_raw.columns)}")
+            return
+
+        # 3. Replace pandas' NaT/NaN with None for database compatibility
+        df_raw_logs = df_raw.where(pd.notnull(df_raw), None)
+        
+        # 4. Iterate and create new Log objects
+        logs_to_add = []
+        for _, row in df_raw_logs.iterrows():
+            # Basic validation: Skip rows without a team member or date
+            # Corrected column names for validation
+            if not row['Team Member (First Last)'] or not row['Date (mm/dd/yy)']:
+                continue
+
+            # Convert date, handling potential errors
+            try:
+                # Corrected date column name
+                log_date = pd.to_datetime(row['Date (mm/dd/yy)']).date()
+            except (ValueError, TypeError):
+                print(f"Skipping row for team member '{row['Team Member (First Last)']}' due to invalid date: {row['Date (mm/dd/yy)']}")
+                continue
+
+            # Create the Log object, using .get() for optional columns and correct names
+            new_log = Log(
+                team_member=row.get('Team Member (First Last)'),
+                function=row.get('Function'),
+                date=log_date,
+                # Corrected file number column name (double space)
+                file_number=str(row.get('File  Number')) if row.get('File  Number') else None,
+                # Explicitly convert status to string to handle mixed types (e.g., 0 and "Approved") from Excel
+                status=str(row.get('Status')) if pd.notna(row.get('Status')) else None,
+                # Corrected escalation reason column name and ensure it's a string
+                tier1_escalation_reason=str(row.get('Escalation Reason')) if pd.notna(row.get('Escalation Reason')) else None,
+                # IM Escalation is not in the source file
+                im_escalation_reason=None,
+                department=row.get('Department'),
+                # Comments is not in the source file
+                comments=None,
+                count=str(row.get('Count')) if row.get('Count') else None,
+                bucket=row.get('Bucket'),
+                time=str(row.get('Time')) if row.get('Time') else None,
+                production_task=row.get('Production Task'),
+                month=row.get('Month')
+            )
+            logs_to_add.append(new_log)
+        
+        # 5. Bulk add to session and commit in batches to avoid timeouts/memory issues
+        if logs_to_add:
+            batch_size = 500  # Process 500 records at a time
+            total_imported = 0
+            for i in range(0, len(logs_to_add), batch_size):
+                batch = logs_to_add[i:i + batch_size]
+                db.session.bulk_save_objects(batch)
+                db.session.commit()
+                total_imported += len(batch)
+                print(f"Committed batch {i // batch_size + 1}, imported {total_imported}/{len(logs_to_add)} logs...")
+            
+            print(f"--- Successfully imported {total_imported} new logs. ---")
+        else:
+            print("No valid log entries found to import.")
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"An error occurred during data import: {e}")
+
+@app.cli.command("count-rows")
+def count_rows_command():
+    """Counts and prints the number of rows in key tables."""
+    try:
+        log_count = Log.query.count()
+        user_count = User.query.count()
+        print("\n--- Database Row Counts ---")
+        print(f"Log table:    {log_count} rows")
+        print(f"User table:   {user_count} rows")
+        print("---------------------------\n")
+    except Exception as e:
+        print(f"An error occurred while counting rows: {e}")
 
 init_dashboard(app)
 init_daily_dashboard(app)
