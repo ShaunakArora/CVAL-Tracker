@@ -149,6 +149,12 @@
                 <a href="/admin/daily_analytics/" class="list-group-item">
                     <i class="fas fa-calendar-day"></i> Daily Analytics
                 </a>
+                <a href="/admin/production_report" class="list-group-item">
+                    <i class="fas fa-file-alt"></i> Production Reports
+                </a>
+                <a href="/admin/functions" class="list-group-item">
+                    <i class="fas fa-cogs"></i> Functions & Departments
+                </a>
                 <a href="/admin/create_employee" class="list-group-item">
                     <i class="fas fa-user-plus"></i> Create Employee
                 </a>
@@ -202,16 +208,39 @@
                     </div>
                     <div class="card-body">
                         <div class="table-responsive">
-                            <table class="table table-hover">
+                            <table class="table table-hover" id="log-table">
                                 <thead>
                                     <tr>
                                         <th>Date</th>
                                         <th>Team Member</th>
+                                        <th>Department</th>
                                         <th>Function</th>
                                         <th>File Number</th>
                                         <th>Status</th>
-                                        <th>Department</th>
+                                        <th>Tier1 Escalation</th>
+                                        <th>IM Escalation</th>
                                         <th>Comments</th>
+                                        <th>Count</th>
+                                        <th>Bucket</th>
+                                        <th>Time</th>
+                                        <th>Production Task</th>
+                                        <th>Month</th>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter Date"></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter Member"></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter Dept."></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter Function"></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter File #"></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter Status"></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter..."></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter..."></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter Comments"></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter..."></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter..."></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter..."></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter..."></td>
+                                        <td><input type="text" class="form-control form-control-sm column-filter" placeholder="Filter..."></td>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -219,15 +248,22 @@
                                     <tr>
                                         <td>{{ log.date or '' }}</td>
                                         <td>{{ log.team_member or '' }}</td>
+                                        <td>{{ log.department or '' }}</td>
                                         <td>{{ log.function or '' }}</td>
                                         <td>{{ log.file_number or '' }}</td>
                                         <td>{{ log.status or '' }}</td>
-                                        <td>{{ log.department or '' }}</td>
+                                        <td>{{ log.tier1_escalation_reason or '' }}</td>
+                                        <td>{{ log.im_escalation_reason or '' }}</td>
                                         <td>{{ log.comments or '' }}</td>
+                                        <td>{{ log.count or '' }}</td>
+                                        <td>{{ log.bucket or '' }}</td>
+                                        <td>{{ log.time or '' }}</td>
+                                        <td>{{ log.production_task or '' }}</td>
+                                        <td>{{ log.month or '' }}</td>
                                     </tr>
                                     {% else %}
                                     <tr>
-                                        <td colspan="7" class="text-center py-3">No logs found.</td>
+                                        <td colspan="14" class="text-center py-3">No logs found.</td>
                                     </tr>
                                     {% endfor %}
                                 </tbody>
@@ -296,6 +332,41 @@
             if (savedTheme === 'dark') {
                 document.body.setAttribute('data-theme', 'dark');
                 document.querySelector('.theme-toggle i').classList.replace('fa-moon', 'fa-sun');
+            }
+
+            // --- Table Filtering Logic ---
+            const table = document.getElementById('log-table');
+            if (table) {
+                const filterInputs = table.querySelectorAll('thead .column-filter');
+                const tableBody = table.querySelector('tbody');
+                const rows = tableBody.getElementsByTagName('tr');
+
+                const applyFilters = () => {
+                    const filterValues = Array.from(filterInputs).map(input => input.value.toLowerCase());
+
+                    for (const row of rows) {
+                        // Skip the 'no logs found' row
+                        if (row.cells.length < filterInputs.length) {
+                            continue;
+                        }
+
+                        let shouldDisplay = true;
+                        for (let i = 0; i < filterValues.length; i++) {
+                            const filterText = filterValues[i];
+                            if (filterText) {
+                                const cell = row.cells[i];
+                                const cellText = cell ? (cell.textContent || cell.innerText).toLowerCase() : '';
+                                if (!cellText.includes(filterText)) {
+                                    shouldDisplay = false;
+                                    break;
+                                }
+                            }
+                        }
+                        row.style.display = shouldDisplay ? '' : 'none';
+                    }
+                };
+
+                filterInputs.forEach(input => input.addEventListener('keyup', applyFilters));
             }
         });
 
