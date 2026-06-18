@@ -272,6 +272,24 @@
                     </div>
                 </div>
 
+                {% if pagination and pagination.pages > 1 %}
+                <nav aria-label="Page navigation">
+                    <ul class="pagination justify-content-center mt-4">
+                        <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
+                            <a class="page-link" href="{{ url_for('track_employee', page=pagination.prev_num, employee=selected_employee) if pagination.has_prev else '#' }}">Previous</a>
+                        </li>
+                        
+                        <li class="page-item disabled">
+                            <span class="page-link">Page {{ pagination.page }} of {{ pagination.pages }}</span>
+                        </li>
+
+                        <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
+                            <a class="page-link" href="{{ url_for('track_employee', page=pagination.next_num, employee=selected_employee) if pagination.has_next else '#' }}">Next</a>
+                        </li>
+                    </ul>
+                </nav>
+                {% endif %}
+
                 {% if selected_employee and stats.function_breakdown %}
                 <div class="row mt-4">
                     <div class="col-md-6">
