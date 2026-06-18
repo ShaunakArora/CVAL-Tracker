@@ -52,9 +52,9 @@ class User(db.Model):
 
 class Log(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    team_member = db.Column(db.String(80), nullable=False)
+    team_member = db.Column(db.String(80), nullable=False, index=True)
     function = db.Column(db.String(100))
-    date = db.Column(db.Date)
+    date = db.Column(db.Date, index=True)   
     file_number = db.Column(db.String(100))
     status = db.Column(db.String(100))
     tier1_escalation_reason = db.Column(db.String(200))
@@ -923,37 +923,51 @@ def track_employee():
     employees = [user.username for user in users]
 
     selected_employee = request.args.get('employee')
+    page = request.args.get('page', 1, type=int)
     
     query = Log.query
     if selected_employee:
         query = query.filter_by(team_member=selected_employee)
         
-    logs_to_display = query.order_by(Log.id.desc()).all()
+    # Add pagination to the query
+    pagination = query.order_by(Log.id.desc()).paginate(page=page, per_page=100, error_out=False)
+    logs_to_display = pagination.items
 
-    # Calculate Statistics if an employee is selected
+    # Calculate Statistics if an employee is selected, using SQL aggregations
     stats = {
         'avg_per_day': 0,
         'top_function': 'N/A',
         'function_breakdown': {}
     }
 
-    if selected_employee and logs_to_display:
-        # Create a DataFrame for easier calculation
-        data = [{'date': l.date, 'function': l.function} for l in logs_to_display if l.date]
-        if data:
-            df = pd.DataFrame(data)
-            
-            # 1. Average files per day
-            daily_counts = df.groupby('date').size()
-            stats['avg_per_day'] = round(daily_counts.mean(), 2)
-            
-            # 2. Top Function & Breakdown
-            if not df['function'].empty:
-                func_counts = df['function'].value_counts()
-                stats['function_breakdown'] = func_counts.to_dict()
-                stats['top_function'] = func_counts.idxmax()
+    if selected_employee:
+        # 1. Function Breakdown and Top Function (SQL)
+        function_breakdown_query = db.session.query(
+            Log.function, 
+            func.count(Log.id)
+        ).filter(
+            Log.team_member == selected_employee
+        ).group_by(
+            Log.function
+        ).order_by(
+            func.count(Log.id).desc()
+        ).all()
 
-    return render_template('admin/track_employee.html', employees=employees, logs=logs_to_display, selected_employee=selected_employee, stats=stats)
+        if function_breakdown_query:
+            stats['function_breakdown'] = dict(function_breakdown_query)
+            stats['top_function'] = function_breakdown_query[0][0]
+
+        # 2. Average files per day (SQL)
+        daily_counts_subquery = db.session.query(
+            func.count(Log.id).label('daily_count')
+        ).filter(Log.team_member == selected_employee).group_by(Log.date).subquery()
+
+        avg_per_day_query = db.session.query(func.avg(daily_counts_subquery.c.daily_count)).scalar()
+        
+        if avg_per_day_query is not None:
+            stats['avg_per_day'] = round(float(avg_per_day_query), 2)
+
+    return render_template('admin/track_employee.html', employees=employees, logs=logs_to_display, selected_employee=selected_employee, stats=stats, pagination=pagination)
 
 @app.route('/admin/tracker/export')
 @admin_required
@@ -1285,3 +1299,4 @@ if __name__ == '__main__':
 
     # Use the dynamic port and bind to 0.0.0.0
     app.run(host="0.0.0.0", port=port, debug=debug_mode)
+
