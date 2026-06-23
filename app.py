@@ -59,12 +59,12 @@ with app.app_context():
         db.create_all()
         # Add columns manually in case the table already exists but doesn't have them
         try:
-            db.session.execute(text("ALTER TABLE user ADD COLUMN failed_login_attempts INTEGER DEFAULT 0;"))
+            db.session.execute(text('ALTER TABLE "user" ADD COLUMN failed_login_attempts INTEGER DEFAULT 0;'))
             db.session.commit()
         except Exception:
             db.session.rollback()
         try:
-            db.session.execute(text("ALTER TABLE user ADD COLUMN lockout_until TIMESTAMP;"))
+            db.session.execute(text('ALTER TABLE "user" ADD COLUMN lockout_until TIMESTAMP;'))
             db.session.commit()
         except Exception:
             db.session.rollback()
