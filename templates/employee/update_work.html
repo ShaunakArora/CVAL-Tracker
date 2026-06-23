@@ -239,6 +239,10 @@
                                     <label for="im_escalation" class="form-label">IM Escalation Reason</label>
                                     <input type="text" class="form-control" id="im_escalation" name="im_escalation">
                                 </div>
+                                <div class="col-md-6">
+                                    <label for="production_task" class="form-label">Production Task</label>
+                                    <input type="text" class="form-control" id="production_task" name="production_task" placeholder="Enter Production Task">
+                                </div>
                                 <div class="col-12">
                                     <label for="comments" class="form-label">Comments</label>
                                     <textarea class="form-control" id="comments" name="comments" rows="2"></textarea>
@@ -267,6 +271,7 @@
                                         <th>File Number</th>
                                         <th>Status</th>
                                         <th>Department</th>
+                                        <th>Production Task</th>
                                         <th>Comments</th>
                                     </tr>
                                 </thead>
@@ -279,11 +284,12 @@
                                         <td>{{ log.file_number }}</td>
                                         <td>{{ log.status }}</td>
                                         <td>{{ log.department }}</td>
+                                        <td>{{ log.production_task or '' }}</td>
                                         <td>{{ log.comments }}</td>
                                     </tr>
                                     {% else %}
                                     <tr>
-                                        <td colspan="7" class="text-center py-3">No logs found.</td>
+                                        <td colspan="8" class="text-center py-3">No logs found.</td>
                                     </tr>
                                     {% endfor %}
                                 </tbody>
