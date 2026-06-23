@@ -4,6 +4,8 @@ load_dotenv()
 import os
 import json
 import io
+import re
+import secrets
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
@@ -48,6 +50,106 @@ db = SQLAlchemy(app)
 
 csrf = CSRFProtect(app)
 
+# Configure permanent session lifetime for Session Expiry Policy
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=30)
+
+# Database schema upgrade at startup: adds lockout columns to existing schema
+with app.app_context():
+    try:
+        db.create_all()
+        # Add columns manually in case the table already exists but doesn't have them
+        try:
+            db.session.execute(text("ALTER TABLE user ADD COLUMN failed_login_attempts INTEGER DEFAULT 0;"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        try:
+            db.session.execute(text("ALTER TABLE user ADD COLUMN lockout_until TIMESTAMP;"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+    except Exception as e:
+        print(f"Error checking/updating database schema: {e}")
+
+# --- Security Helper Functions ---
+
+# In-memory Rate Limiting for Login endpoint
+login_attempts = {} # ip_address -> list of timestamps
+
+def is_rate_limited(ip_address, limit=10, period=60):
+    """Checks if an IP address has exceeded the rate limit (limit requests per period seconds)."""
+    now = datetime.now()
+    timestamps = login_attempts.get(ip_address, [])
+    # Filter timestamps within the period
+    timestamps = [t for t in timestamps if (now - t).total_seconds() < period]
+    login_attempts[ip_address] = timestamps
+    if len(timestamps) >= limit:
+        return True
+    return False
+
+def record_attempt(ip_address):
+    now = datetime.now()
+    if ip_address not in login_attempts:
+        login_attempts[ip_address] = []
+    login_attempts[ip_address].append(now)
+
+# Password Complexity Policy validator
+def validate_password_complexity(password):
+    """Enforces minimum length of 8, at least one uppercase, lowercase, digit, and special char."""
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters long."
+    if not re.search(r"[A-Z]", password):
+        return False, "Password must contain at least one uppercase letter."
+    if not re.search(r"[a-z]", password):
+        return False, "Password must contain at least one lowercase letter."
+    if not re.search(r"\d", password):
+        return False, "Password must contain at least one digit."
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+        return False, "Password must contain at least one special character."
+    return True, ""
+
+# --- Security Global Hooks & Error Handlers ---
+
+@app.before_request
+def enforce_https():
+    """Redirects HTTP requests to HTTPS in production environment."""
+    if os.environ.get('FLASK_ENV') == 'production':
+        proto = request.headers.get('X-Forwarded-Proto', 'http')
+        if proto != 'https':
+            url = request.url.replace('http://', 'https://', 1)
+            return redirect(url, code=301)
+
+@app.after_request
+def add_security_headers(response):
+    """Enforces secure browser settings via HTTP headers."""
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    if os.environ.get('FLASK_ENV') == 'production' or request.is_secure:
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    # Content Security Policy configured to allow bootstrap and standard CDNs used by this dashboard
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://stackpath.bootstrapcdn.com; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://stackpath.bootstrapcdn.com https://cdnjs.cloudflare.com; "
+        "font-src 'self' https://cdnjs.cloudflare.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self';"
+    )
+    return response
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    """Generic secure error envelope to avoid exposing stack trace details to users."""
+    app.logger.error(f"Internal Server Error (500): {e}", exc_info=True)
+    try:
+        add_system_alert("Internal system error occurred (500).")
+    except Exception:
+        pass
+    if request.path.startswith('/api/') or request.headers.get('Content-Type') == 'application/json':
+        return jsonify({"error": "An internal server error occurred."}), 500
+    return render_template('error.html', error_message="An internal server error occurred. Please try again later or contact support."), 500
+
 # --- SQLAlchemy Models ---
 
 class User(db.Model):
@@ -60,6 +162,9 @@ class User(db.Model):
     shift = db.Column(db.String(50))
     location = db.Column(db.String(50))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Security tracking fields for lockout policy
+    failed_login_attempts = db.Column(db.Integer, default=0, nullable=False)
+    lockout_until = db.Column(db.DateTime, nullable=True)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -494,34 +599,99 @@ def summary():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
+        # 1. IP-level Rate Limiting
+        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+        if is_rate_limited(client_ip, limit=10, period=60):
+            flash('Too many login attempts. Please try again in a minute.', 'danger')
+            try:
+                add_system_alert(f"Rate limit exceeded on login endpoint from IP: {client_ip}")
+            except Exception:
+                pass
+            return redirect(url_for('login'))
+        record_attempt(client_ip)
+
         username = request.form.get('username', '').strip()
         password = request.form.get('password')
 
         # Case-insensitive username lookup
         user = User.query.filter(func.lower(User.username) == username.lower()).first()
 
-        if user and check_password_hash(user.password, password):
-            session['user'] = user.username
-            session['role'] = user.role
-            
-            if user.role == 'employee':
-                add_system_alert(f"Employee {user.username} logged in.")
-            
-            if user.role == 'admin':
-                return redirect(url_for('admin_dashboard'))
+        if user:
+            # 2. Account Lockout Check
+            if user.lockout_until and user.lockout_until > datetime.now():
+                lockout_left = int((user.lockout_until - datetime.now()).total_seconds() / 60) + 1
+                flash(f"Account is temporarily locked. Try again in {lockout_left} minutes.", 'danger')
+                try:
+                    add_system_alert(f"Blocked login attempt for locked account: {user.username}")
+                except Exception:
+                    pass
+                return redirect(url_for('login'))
+
+            # 3. Password Verification
+            if check_password_hash(user.password, password):
+                # Reset failed login count and lockout state on success
+                user.failed_login_attempts = 0
+                user.lockout_until = None
+                db.session.commit()
+
+                # Enable session expiry timeout (starts permanent timer of 30 mins)
+                session.permanent = True
+                session['user'] = user.username
+                session['role'] = user.role
+                
+                try:
+                    if user.role == 'employee':
+                        add_system_alert(f"Employee {user.username} logged in.")
+                    elif user.role == 'admin':
+                        add_system_alert(f"Admin {user.username} logged in.")
+                except Exception:
+                    pass
+                
+                if user.role == 'admin':
+                    return redirect(url_for('admin_dashboard'))
+                else:
+                    return redirect(url_for('employee_dashboard'))
             else:
-                return redirect(url_for('employee_dashboard'))
+                # Increment failed login count
+                user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+                if user.failed_login_attempts >= 5:
+                    user.lockout_until = datetime.now() + timedelta(minutes=15)
+                    flash('Invalid username or password. Your account has been locked for 15 minutes.', 'danger')
+                    try:
+                        add_system_alert(f"Account locked due to multiple failed login attempts: {user.username}")
+                    except Exception:
+                        pass
+                else:
+                    attempts_left = 5 - user.failed_login_attempts
+                    flash(f'Invalid username or password. {attempts_left} attempts remaining.', 'danger')
+                
+                db.session.commit()
+                try:
+                    add_system_alert(f"Failed login attempt for user: {user.username}")
+                except Exception:
+                    pass
+                return redirect(url_for('login'))
         else:
+            # Prevent username timing attack using dummy verification
+            check_password_hash(generate_password_hash('dummy_pass'), password)
             flash('Invalid username or password.', 'danger')
+            try:
+                add_system_alert(f"Failed login attempt for non-existent user: {username}")
+            except Exception:
+                pass
             return redirect(url_for('login'))
     return render_template('login.html')
 
 @app.route('/logout')
 def logout():
     if 'user' in session:
-        # Log the logout if it's an employee
-        if session.get('role') == 'employee':
-            add_system_alert(f"Employee {session.get('user')} logged out.")
+        # Log the logout for both admins and employees
+        username = session.get('user')
+        role = session.get('role')
+        try:
+            add_system_alert(f"{role.capitalize()} {username} logged out.")
+        except Exception:
+            pass
         session.clear()
     return redirect(url_for('login'))
 
@@ -685,6 +855,7 @@ def manage_functions():
             new_function = Function(name=function_name)
             db.session.add(new_function)
             db.session.commit()
+            add_system_alert(f"Admin {session.get('user')} created function: {function_name}")
             flash(f'Function "{function_name}" created successfully.', 'success')
         return redirect(url_for('manage_functions'))
 
@@ -712,6 +883,7 @@ def edit_function(id):
             Log.query.filter_by(function=old_name).update({'function': new_name})
             function_to_edit.name = new_name
             db.session.commit()
+            add_system_alert(f"Admin {session.get('user')} edited function from '{old_name}' to '{new_name}'")
             flash(f'Function updated from "{old_name}" to "{new_name}".', 'success')
     return redirect(url_for('manage_functions'))
 
@@ -722,9 +894,11 @@ def delete_function(id):
     if Log.query.filter_by(function=function_to_delete.name).first():
         flash(f'Cannot delete function "{function_to_delete.name}" because it is in use in logs. Please edit it instead.', 'danger')
     else:
+        func_name = function_to_delete.name
         db.session.delete(function_to_delete)
         db.session.commit()
-        flash(f'Function "{function_to_delete.name}" has been deleted.', 'success')
+        add_system_alert(f"Admin {session.get('user')} deleted function: {func_name}")
+        flash(f'Function "{func_name}" has been deleted.', 'success')
     return redirect(url_for('manage_functions'))
 
 @app.route('/admin/create_employee', methods=['GET', 'POST'])
@@ -743,8 +917,9 @@ def create_employee():
             flash('All fields are required.', 'danger')
             return redirect(url_for('create_employee'))
 
-        if len(password) < 8:
-            flash('Password must be at least 8 characters long.', 'danger')
+        is_valid, complexity_err = validate_password_complexity(password)
+        if not is_valid:
+            flash(complexity_err, 'danger')
             return redirect(url_for('create_employee'))
 
         existing_user = User.query.filter(
@@ -768,6 +943,7 @@ def create_employee():
         )
         db.session.add(new_user)
         db.session.commit()
+        add_system_alert(f"Admin {session.get('user')} created employee: {username} ({role})")
         flash(f'Employee "{username}" created successfully!', 'success')
         return redirect(url_for('view_employees'))
 
@@ -1164,6 +1340,20 @@ def init_db_command():
 def import_data_command():
     """Deletes and re-imports users from the production report, then imports other data."""
     new_report_file = os.path.join(BASE_DIR, 'Production & Performance Report Till  May 28th 2026.xlsx')
+    
+    # File type and size validations for import safety
+    if not new_report_file.lower().endswith('.xlsx'):
+        print(f"Error: Invalid file type. Must be a .xlsx spreadsheet. File path: {new_report_file}")
+        return
+    try:
+        file_size = os.path.getsize(new_report_file)
+        if file_size > 50 * 1024 * 1024: # Enforce 50MB safety limit
+            print(f"Error: File size ({file_size} bytes) exceeds safety limit of 50MB.")
+            return
+    except Exception as e:
+        print(f"Error reading file size: {e}")
+        return
+
     if not os.path.exists(new_report_file):
         print(f"Report file not found: {new_report_file}. Skipping user import.")
         return
@@ -1332,6 +1522,43 @@ def count_rows_command():
 
 init_dashboard(app)
 init_daily_dashboard(app)
+
+@app.cli.command("audit-dependencies")
+def audit_dependencies():
+    """CLI tool for automated dependency vulnerability scanning."""
+    import subprocess
+    print("Running dependency vulnerability scan (pip-audit / safety)...")
+    
+    # Try running pip-audit
+    try:
+        res = subprocess.run(["pip-audit"], capture_output=True, text=True)
+        if res.returncode == 0:
+            print("pip-audit output (No vulnerabilities found):")
+            print(res.stdout)
+        else:
+            print("Vulnerabilities detected by pip-audit:")
+            print(res.stdout)
+            print(res.stderr)
+        return
+    except FileNotFoundError:
+        pass
+
+    # Try running safety check
+    try:
+        res = subprocess.run(["safety", "check"], capture_output=True, text=True)
+        if res.returncode == 0:
+            print("safety check output (No vulnerabilities found):")
+            print(res.stdout)
+        else:
+            print("Vulnerabilities detected by safety:")
+            print(res.stdout)
+            print(res.stderr)
+        return
+    except FileNotFoundError:
+        pass
+
+    print("Error: Neither 'pip-audit' nor 'safety' is installed.")
+    print("To install, run: pip install pip-audit   OR   pip install safety")
 
 if __name__ == '__main__':
     print(f"Template folder set to: {os.path.join(BASE_DIR, 'templates')}")
