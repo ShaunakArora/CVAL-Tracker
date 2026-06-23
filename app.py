@@ -22,7 +22,14 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
 
 # Security Configuration
-app.secret_key = os.environ.get('SECRET_KEY', 'your_secret_key_here') # Load from ENV in production
+secret_key = os.environ.get('SECRET_KEY')
+if not secret_key:
+    if os.environ.get('FLASK_ENV') == 'production':
+        raise RuntimeError("SECRET_KEY environment variable is required in production.")
+    else:
+        import secrets
+        secret_key = secrets.token_hex(24)
+app.secret_key = secret_key
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
@@ -33,6 +40,10 @@ if db_uri and db_uri.startswith("postgres://"):
     db_uri = db_uri.replace("postgres://", "postgresql://", 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = db_uri or f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 280,
+}
 db = SQLAlchemy(app)
 
 csrf = CSRFProtect(app)
@@ -49,6 +60,9 @@ class User(db.Model):
     shift = db.Column(db.String(50))
     location = db.Column(db.String(50))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 class Log(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -67,20 +81,32 @@ class Log(db.Model):
     production_task = db.Column(db.String(100))
     month = db.Column(db.String(50))
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
 class Alert(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     message = db.Column(db.String(500), nullable=False)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 class Function(db.Model):
     __tablename__ = 'functions'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
 class Department(db.Model):
     __tablename__ = 'department'
     id = db.Column(db.Integer, primary_key=True)
     dept_name = db.Column(db.String(100), unique=True, nullable=False)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 
 def add_system_alert(message):
@@ -530,6 +556,7 @@ def employee_update():
             # These always create a new log entry.
             if not file_number or status == 'In Progress':
                 # The check for duplicates is now handled above.
+                month_str = log_date.strftime('%b-%y') if log_date else None
                 new_log = Log(
                     team_member=team_member,
                     function=request.form.get('function'),
@@ -539,7 +566,12 @@ def employee_update():
                     tier1_escalation_reason=request.form.get('tier1_escalation'),
                     im_escalation_reason=request.form.get('im_escalation'),
                     department=user_department,
-                    comments=request.form.get('comments')
+                    comments=request.form.get('comments'),
+                    count="1",
+                    bucket=request.form.get('function'),  # Same as function name
+                    time=request.form.get('time'),
+                    production_task=request.form.get('production_task'),
+                    month=month_str
                 )
                 db.session.add(new_log)
                 db.session.commit()
@@ -555,11 +587,16 @@ def employee_update():
 
                 if log_to_update:
                     # Update the existing log entry
+                    month_str = log_date.strftime('%b-%y') if log_date else None
                     log_to_update.status = status
                     log_to_update.date = log_date
                     log_to_update.tier1_escalation_reason = request.form.get('tier1_escalation')
                     log_to_update.im_escalation_reason = request.form.get('im_escalation')
                     log_to_update.comments = request.form.get('comments')
+                    log_to_update.count = "1"
+                    log_to_update.bucket = request.form.get('function')  # Same as function name
+                    log_to_update.production_task = request.form.get('production_task')
+                    log_to_update.month = month_str
                     db.session.commit()
                     flash(f"Work log for file '{file_number}' updated to '{status}'.", 'success')
                 else:
@@ -994,6 +1031,10 @@ def export_tracker_data():
                 "Status": log.status,
                 "Department": log.department,
                 "Comments": log.comments,
+                "Count": log.count,
+                "Bucket": log.bucket,
+                "Production Task": log.production_task,
+                "Month": log.month,
             }
             for log in logs
         ]
@@ -1036,7 +1077,7 @@ def favicon():
     return '', 204
 
 @app.route('/chart-data')
-@login_required
+@admin_required
 def chart_data():
     try:
         # Query logs and aggregate by date and function
@@ -1299,4 +1340,3 @@ if __name__ == '__main__':
 
     # Use the dynamic port and bind to 0.0.0.0
     app.run(host="0.0.0.0", port=port, debug=debug_mode)
-
