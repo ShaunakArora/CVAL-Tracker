@@ -161,7 +161,7 @@
                                     <table class="table table-bordered table-hover table-striped text-center mb-0">
                                         <thead class="table-light">
                                             <tr>
-                                                <th class="text-start" style="position: sticky; left: 0; z-index: 2; background-color: var(--card-bg);">Department</th>
+                                                <th class="text-start" style="position: sticky; left: 0; z-index: 2; background-color: var(--card-bg);">Functions</th>
                                                 <th style="min-width: 80px; z-index: 1;">Total</th>
                                                 {% for day in days_in_month %}
                                                     <th style="min-width: 50px;">{{ day }}</th>
@@ -171,7 +171,7 @@
                                         <tbody>
                                             {% for row in production_by_date %}
                                             <tr>
-                                                <td class="text-start fw-bold" style="position: sticky; left: 0; z-index: 1; background-color: var(--card-bg);">{{ row.department }}</td>
+                                                <td class="text-start fw-bold" style="position: sticky; left: 0; z-index: 1; background-color: var(--card-bg);">{{ row.function }}</td>
                                                 <td class="fw-bold">{{ row.total }}</td>
                                                 {% for day in days_in_month %}
                                                     <td>
